@@ -41,7 +41,8 @@ const State = {
   edge: {},              // одноразовые «нажалось в этом кадре»
   // прочее
   totemPath: { p1: false, p2: false }, // оба алтаря посещены на 5 уровне
-  endTriggered: false
+  endTriggered: false,
+  collectedShards: 0   // прогресс сбора осколков сквозь все уровни
 };
 
 // ===== DOM-ссылки =====
@@ -183,9 +184,22 @@ function loadLevel(idx) {
     questionIds: def.questionIds || []
   };
   State.levelIndex = idx;
-  State.p1 = { x: sp1[0] * TS + TS/2, y: sp1[1] * TS + TS/2 };
-  State.p2 = { x: sp2[0] * TS + TS/2, y: sp2[1] * TS + TS/2 };
+  State.p1 = { x: sp1[0] * TS + TS/2, y: sp1[1] * TS + TS/2,
+               hp: 3, dir: 'down', invulnUntil: 0, lastMoveDir: null };
+  State.p2 = { x: sp2[0] * TS + TS/2, y: sp2[1] * TS + TS/2,
+               hp: 3, dir: 'down', invulnUntil: 0, lastMoveDir: null };
   State.totemPath = { p1: false, p2: false };
+
+  // Инициализация слизней — пиксельная позиция, hp, мерцание
+  for (const ent of entities) {
+    if (ent.type === 'slime') {
+      ent.px = ent.x * TS + TS/2;
+      ent.py = ent.y * TS + TS/2;
+      ent.hp = 2;
+      ent.flashUntil = 0;
+      ent.knockUntil = 0;
+    }
+  }
 
   // обновим заголовок
   if (DOM['level-name']) DOM['level-name'].textContent = def.name;
@@ -228,22 +242,62 @@ function isPositionFree(px, py) {
       if (ent.type === 'totem') return false;
       if (ent.type === 'vine' && !ent.cut) return false;
       if (ent.type === 'door' && !ent.open) return false;
-      // plate, cut vine, open door — проходимы
+      if (ent.type === 'crate') return false;
+      // plate, rune, shard, target, cut vine, open door — проходимы
     }
   }
   return true;
 }
 
-function moveActor(actor, dx, dy) {
-  // Делаем по одной координате — даёт «скольжение» вдоль стен
+function moveActor(actor, dx, dy, isP1) {
+  // Делаем по одной координате — даёт «скольжение» вдоль стен.
+  // Если перед актёром (только Игрок 1) ящик — пытаемся толкнуть.
   if (dx !== 0) {
+    if (isP1) tryPushCrateAlong(actor, Math.sign(dx), 0);
     const nx = actor.x + dx;
     if (isPositionFree(nx, actor.y)) actor.x = nx;
   }
   if (dy !== 0) {
+    if (isP1) tryPushCrateAlong(actor, 0, Math.sign(dy));
     const ny = actor.y + dy;
     if (isPositionFree(actor.x, ny)) actor.y = ny;
   }
+}
+
+function tryPushCrateAlong(actor, sx, sy) {
+  // sx,sy ∈ {-1,0,1}. Только одна из них ненулевая.
+  const half = PLAYER_HALF;
+  const fx = actor.x + sx * (half + 2);
+  const fy = actor.y + sy * (half + 2);
+  if (fx < 0 || fy < 0 || fx >= CANVAS_W || fy >= CANVAS_H) return;
+  const tx = Math.floor(fx / TS);
+  const ty = Math.floor(fy / TS);
+  const ent = getEntityAt(tx, ty);
+  if (!ent || ent.type !== 'crate') return;
+
+  // Если ящик уже стоит на цели — он защёлкнут.
+  const onTarget = State.level.entities.some(
+    t => t.type === 'target' && t.x === ent.x && t.y === ent.y
+  );
+  if (onTarget) return;
+
+  // Куда толкать?
+  const bx = tx + sx;
+  const by = ty + sy;
+  if (bx < 0 || by < 0 || bx >= MAP_W || by >= MAP_H) return;
+  const beyondCh = State.level.tiles[by][bx];
+  if (!isWalkableTile(beyondCh)) return;
+  const beyondEnt = getEntityAt(bx, by);
+  // позади можно только пустоту или цель (target)
+  if (beyondEnt && beyondEnt.type !== 'target') return;
+
+  // Cooldown — чтобы один пиксельный кадр не пушил по 5 раз
+  const now = performance.now();
+  if (ent.lastPushed && now - ent.lastPushed < 220) return;
+  ent.lastPushed = now;
+
+  ent.x = bx;
+  ent.y = by;
 }
 
 function getActorTile(actor) {
@@ -262,8 +316,9 @@ function updatePlayers() {
   if (isKey(KEY_P1_RIGHT)) dx += 1;
   if (isKey(KEY_P1_UP))    dy -= 1;
   if (isKey(KEY_P1_DOWN))  dy += 1;
+  updateActorDir(State.p1, dx, dy);
   if (dx && dy) { dx *= 0.707; dy *= 0.707; }
-  moveActor(State.p1, dx * PLAYER_SPEED, dy * PLAYER_SPEED);
+  moveActor(State.p1, dx * PLAYER_SPEED, dy * PLAYER_SPEED, true);
 
   // Игрок 2
   dx = 0; dy = 0;
@@ -271,31 +326,74 @@ function updatePlayers() {
   if (isKey(KEY_P2_RIGHT)) dx += 1;
   if (isKey(KEY_P2_UP))    dy -= 1;
   if (isKey(KEY_P2_DOWN))  dy += 1;
+  updateActorDir(State.p2, dx, dy);
   if (dx && dy) { dx *= 0.707; dy *= 0.707; }
-  moveActor(State.p2, dx * PLAYER_SPEED, dy * PLAYER_SPEED);
+  moveActor(State.p2, dx * PLAYER_SPEED, dy * PLAYER_SPEED, false);
 }
 
-// ===== Логика плит и дверей =====
-function updatePlates() {
+function updateActorDir(actor, dx, dy) {
+  // Сохраняем направление взгляда. Приоритет — горизонталь, если оба нажаты.
+  if (dx > 0) actor.dir = 'right';
+  else if (dx < 0) actor.dir = 'left';
+  else if (dy > 0) actor.dir = 'down';
+  else if (dy < 0) actor.dir = 'up';
+}
+
+// ===== Пазлы: плиты, цели, руны =====
+function updatePuzzles() {
   if (!State.level) return;
   const t1 = getActorTile(State.p1);
   const t2 = getActorTile(State.p2);
-  let allPressed = true;
+
+  // Плиты
+  let allPlatesPressed = true;
   let hasPlate = false;
   for (const ent of State.level.entities) {
     if (ent.type !== 'plate') continue;
     hasPlate = true;
-    const standing =
+    // плита считается прижатой, если на её тайле игрок ИЛИ ящик
+    const playerOn =
       (t1.tx === ent.x && t1.ty === ent.y) ||
       (t2.tx === ent.x && t2.ty === ent.y);
-    ent.pressed = standing;
-    if (!standing) allPressed = false;
+    const crateOn = State.level.entities.some(
+      c => c.type === 'crate' && c.x === ent.x && c.y === ent.y
+    );
+    ent.pressed = playerOn || crateOn;
+    if (!ent.pressed) allPlatesPressed = false;
   }
-  // Если плит нет — двери остаются как были
-  if (!hasPlate) return;
-  // Открываем/закрываем все двери уровня
+
+  // Цели для ящиков
+  let allTargetsCovered = true;
+  let hasTarget = false;
   for (const ent of State.level.entities) {
-    if (ent.type === 'door') ent.open = allPressed;
+    if (ent.type !== 'target') continue;
+    hasTarget = true;
+    const covered = State.level.entities.some(
+      c => c.type === 'crate' && c.x === ent.x && c.y === ent.y
+    );
+    ent.covered = covered;
+    if (!covered) allTargetsCovered = false;
+  }
+
+  // Руны (зажигаются, когда P2 на них; остаются гореть навсегда)
+  let allRunesLit = true;
+  let hasRune = false;
+  for (const ent of State.level.entities) {
+    if (ent.type !== 'rune') continue;
+    hasRune = true;
+    if (!ent.lit && t2.tx === ent.x && t2.ty === ent.y) {
+      ent.lit = true;
+    }
+    if (!ent.lit) allRunesLit = false;
+  }
+
+  if (!hasPlate && !hasTarget && !hasRune) return;
+  const allOk =
+    (hasPlate ? allPlatesPressed : true) &&
+    (hasTarget ? allTargetsCovered : true) &&
+    (hasRune ? allRunesLit : true);
+  for (const ent of State.level.entities) {
+    if (ent.type === 'door') ent.open = allOk;
   }
 }
 
@@ -318,7 +416,126 @@ function tryCutVine() {
   if (closest) {
     closest.cut = true;
     setHint('Лоза перерублена.');
+    return true;
   }
+  return false;
+}
+
+// ===== Атака Солиса =====
+const ATTACK_RANGE = 30;
+function tryAttack() {
+  const p1 = State.p1;
+  const dirOff = {
+    up:    [0, -1], down:  [0,  1],
+    left:  [-1, 0], right: [1,  0]
+  }[p1.dir] || [0, 1];
+  // центр атаки: смещение от P1 на ATTACK_RANGE/2
+  const ax = p1.x + dirOff[0] * (ATTACK_RANGE / 2 + 6);
+  const ay = p1.y + dirOff[1] * (ATTACK_RANGE / 2 + 6);
+  let hit = false;
+  for (const ent of State.level.entities) {
+    if (ent.type !== 'slime' || ent.hp <= 0) continue;
+    const dx = ent.px - ax, dy = ent.py - ay;
+    if (Math.sqrt(dx*dx + dy*dy) < ATTACK_RANGE) {
+      ent.hp -= 1;
+      ent.flashUntil = performance.now() + 220;
+      // отбрасывание
+      ent.knockUntil = performance.now() + 180;
+      ent.knockDx = dirOff[0] * 1.6;
+      ent.knockDy = dirOff[1] * 1.6;
+      hit = true;
+    }
+  }
+  // Визуальный «свайп» меча
+  State.swing = { x: ax, y: ay, until: performance.now() + 140, dir: p1.dir };
+  return hit;
+}
+
+// ===== Слизни =====
+const SLIME_SPEED = 0.45;
+function updateSlimes() {
+  if (!State.level) return;
+  const now = performance.now();
+  for (const ent of State.level.entities) {
+    if (ent.type !== 'slime' || ent.hp <= 0) continue;
+
+    // отбрасывание
+    if (ent.knockUntil > now) {
+      ent.px += ent.knockDx;
+      ent.py += ent.knockDy;
+      continue;
+    }
+
+    // движение к ближайшему игроку
+    const target = nearestPlayer(ent.px, ent.py);
+    const dx = target.x - ent.px;
+    const dy = target.y - ent.py;
+    const d = Math.sqrt(dx*dx + dy*dy);
+    if (d > 1) {
+      // Маленькая «гуляющая» вариация — слизни покачиваются
+      const t = now / 400 + ent.x;
+      const wobble = Math.sin(t) * 0.2;
+      const nx = ent.px + (dx / d) * SLIME_SPEED;
+      const ny = ent.py + (dy / d) * SLIME_SPEED + wobble;
+      // Простая проверка — не идти на стену тайла
+      const tx = Math.floor(nx / TS);
+      const ty = Math.floor(ny / TS);
+      if (ty >= 0 && ty < MAP_H && tx >= 0 && tx < MAP_W) {
+        const ch = State.level.tiles[ty][tx];
+        if (isWalkableTile(ch)) {
+          ent.px = nx;
+          ent.py = ny;
+        }
+      }
+    }
+
+    // контакт с игроком — урон
+    for (const p of [State.p1, State.p2]) {
+      if (p.invulnUntil > now || p.hp <= 0) continue;
+      const ddx = ent.px - p.x, ddy = ent.py - p.y;
+      if (Math.sqrt(ddx*ddx + ddy*ddy) < 18) {
+        p.hp = Math.max(0, p.hp - 1);
+        p.invulnUntil = now + 1100;
+        // лёгкое отталкивание игрока
+        const len = Math.sqrt(ddx*ddx + ddy*ddy) || 1;
+        p.x -= (ddx / len) * 8;
+        p.y -= (ddy / len) * 8;
+        if (p.hp === 0) onPlayerFell(p);
+      }
+    }
+  }
+}
+
+function nearestPlayer(px, py) {
+  const d1 = Math.hypot(State.p1.x - px, State.p1.y - py);
+  const d2 = Math.hypot(State.p2.x - px, State.p2.y - py);
+  return d1 < d2 ? State.p1 : State.p2;
+}
+
+// ===== Сбор осколков Тотема =====
+function updateShardPickup() {
+  if (!State.level) return;
+  for (const ent of State.level.entities) {
+    if (ent.type !== 'shard' || ent.collected) continue;
+    const ex = ent.x * TS + TS/2;
+    const ey = ent.y * TS + TS/2;
+    for (const p of [State.p1, State.p2]) {
+      if (Math.hypot(ex - p.x, ey - p.y) < 18) {
+        ent.collected = true;
+        State.collectedShards++;
+        setHint(`Осколок собран! (${State.collectedShards}/4)`, 2000);
+        return;
+      }
+    }
+  }
+}
+
+function onPlayerFell(p) {
+  // Простой исход: перезагрузка локации с лёгкой паузой
+  setHint('Один из вас пал. Локация перезапускается…', 2200);
+  setTimeout(() => {
+    if (State.scene === 'game') loadLevel(State.levelIndex);
+  }, 1500);
 }
 
 // ===== Алтари и Тотем =====
@@ -333,7 +550,7 @@ function distActorToEntity(actor, ent) {
 function findReadyAltar() {
   if (!State.level) return null;
   for (const ent of State.level.entities) {
-    if (ent.type !== 'altar' || ent.done) continue;
+    if ((ent.type !== 'altar' && ent.type !== 'wanderer') || ent.done) continue;
     const d1 = distActorToEntity(State.p1, ent);
     const d2 = distActorToEntity(State.p2, ent);
     if (d1 < NEAR_DIST && d2 < NEAR_DIST) return ent;
@@ -366,10 +583,14 @@ function tryInteract() {
   // Тотем (на 5-м уровне)?
   const totem = findReadyTotem();
   if (totem) {
-    // На 5-м уровне для тотема нужно, чтобы оба алтаря были посещены
-    const altarsLeft = State.level.entities.some(e => e.type === 'altar' && !e.done);
+    // Нужны: оба алтаря этого уровня + все 4 осколка
+    const altarsLeft = State.level.entities.some(e => e.type === 'altar' && !e.done); // странники опциональны
     if (altarsLeft) {
       setHint('Сначала пройдите оба алтаря этого места.');
+      return;
+    }
+    if (State.collectedShards < 4) {
+      setHint(`Не хватает осколков (${State.collectedShards}/4). Вернитесь к локациям.`);
       return;
     }
     totem.done = true;
@@ -379,8 +600,19 @@ function tryInteract() {
 }
 
 function openAltarDialog(altar) {
-  const lvlQs = QUESTIONS[altar.qLevel] || [];
-  const q = lvlQs[altar.qIndex] || lvlQs[0];
+  let q;
+  if (altar.type === 'wanderer') {
+    // Случайный «странник» — но не повторяемся в рамках сессии
+    const used = State.usedWanderers || (State.usedWanderers = new Set());
+    const fresh = WANDERING_QUESTIONS.filter((_, i) => !used.has(i));
+    const pool = fresh.length ? fresh : WANDERING_QUESTIONS;
+    const idx = Math.floor(Math.random() * pool.length);
+    q = pool[idx];
+    used.add(WANDERING_QUESTIONS.indexOf(q));
+  } else {
+    const lvlQs = QUESTIONS[altar.qLevel] || [];
+    q = lvlQs[altar.qIndex] || lvlQs[0];
+  }
   if (!q) return;
 
   State.dialog.active = true;
@@ -388,6 +620,9 @@ function openAltarDialog(altar) {
   State.dialog.answered = { 1: false, 2: false };
   State.dialog.onClose = () => {
     altar.done = true;
+    // Алтарь восстанавливает силы — оба полностью лечатся.
+    if (State.p1) State.p1.hp = 3;
+    if (State.p2) State.p2.hp = 3;
     saveProgress();
   };
 
@@ -432,9 +667,15 @@ function checkExit() {
   const ch2 = State.level.tiles[t2.ty][t2.tx];
   if (isExitTile(ch1) && isExitTile(ch2)) {
     // обязательно сначала пройти все алтари этого уровня
-    const altarsLeft = State.level.entities.some(e => e.type === 'altar' && !e.done);
+    const altarsLeft = State.level.entities.some(e => e.type === 'altar' && !e.done); // странники опциональны
     if (altarsLeft) {
       setHint('Сначала пройдите все алтари этой локации.');
+      return;
+    }
+    // и зажечь все руны (если есть)
+    const runesLeft = State.level.entities.some(e => e.type === 'rune' && !e.lit);
+    if (runesLeft) {
+      setHint('Луна, зажгите все руны — пройдите по ним.');
       return;
     }
     loadLevel(State.levelIndex + 1);
@@ -503,6 +744,23 @@ function drawTilemap() {
 }
 
 function drawEntities() {
+  // Сперва — «подложки»: цели для ящиков и руны (на полу)
+  for (const ent of State.level.entities) {
+    const px = ent.x * TS;
+    const py = ent.y * TS;
+    if (ent.type === 'target') {
+      ctx.drawImage(SPRITES.target, px, py);
+      if (ent.covered) {
+        ctx.globalAlpha = 0.3;
+        ctx.fillStyle = '#7bc043';
+        ctx.fillRect(px + 4, py + 4, TS - 8, TS - 8);
+        ctx.globalAlpha = 1;
+      }
+    } else if (ent.type === 'rune') {
+      ctx.drawImage(ent.lit ? SPRITES.runeOn : SPRITES.runeOff, px, py);
+    }
+  }
+  // Затем — всё остальное
   for (const ent of State.level.entities) {
     const px = ent.x * TS;
     const py = ent.y * TS;
@@ -544,15 +802,100 @@ function drawEntities() {
         ctx.globalAlpha = 1;
         ctx.drawImage(SPRITES.totem, px, py);
         break;
+      case 'crate':
+        ctx.drawImage(SPRITES.crate, px, py);
+        break;
+      case 'wanderer':
+        // мягкое свечение, если ещё не пройден
+        if (!ent.done) {
+          const t = (Date.now() / 800) + ent.x;
+          ctx.globalAlpha = 0.3 + Math.sin(t) * 0.15;
+          ctx.fillStyle = '#ff9bb3';
+          ctx.fillRect(px - 4, py - 4, TS + 8, TS + 8);
+          ctx.globalAlpha = 1;
+        }
+        ctx.drawImage(SPRITES.mushroom, px, py);
+        break;
+      case 'shard':
+        if (!ent.collected) {
+          // парение
+          const t = Date.now() / 350 + ent.x;
+          const offy = Math.sin(t) * 2;
+          ctx.globalAlpha = 0.4;
+          ctx.fillStyle = '#fff3b0';
+          ctx.fillRect(px - 4, py - 4, TS + 8, TS + 8);
+          ctx.globalAlpha = 1;
+          ctx.drawImage(SPRITES.shard, px, py + offy);
+        }
+        break;
     }
   }
 }
 
 function drawPlayers() {
-  // P1
-  const s = TS; // спрайт уже масштабирован 2x → 32×32
-  ctx.drawImage(SPRITES.p1, State.p1.x - s/2, State.p1.y - s/2);
-  ctx.drawImage(SPRITES.p2, State.p2.x - s/2, State.p2.y - s/2);
+  const s = TS;
+  drawOnePlayer(State.p1, SPRITES.p1);
+  drawOnePlayer(State.p2, SPRITES.p2);
+
+  // Свинг меча Солиса
+  if (State.swing && State.swing.until > performance.now()) {
+    const sw = State.swing;
+    const t = (sw.until - performance.now()) / 140;
+    ctx.save();
+    ctx.globalAlpha = 0.5 + t * 0.4;
+    ctx.fillStyle = '#fff3b0';
+    const r = 16 + (1 - t) * 6;
+    ctx.beginPath();
+    ctx.arc(sw.x, sw.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawOnePlayer(p, sprite) {
+  const s = TS;
+  // Мерцание во время неуязвимости
+  const inv = p.invulnUntil > performance.now();
+  if (inv) {
+    const blink = Math.floor(performance.now() / 80) % 2 === 0;
+    if (blink) return; // пропускаем кадр
+  }
+  ctx.drawImage(sprite, p.x - s/2, p.y - s/2);
+  // Маленькая «искра» в направлении взгляда — показывает, куда атакует/смотрит
+  if (p.dir) {
+    const off = { up: [0,-1], down: [0,1], left: [-1,0], right: [1,0] }[p.dir];
+    const isP1 = (p === State.p1);
+    ctx.fillStyle = isP1 ? '#ffe066' : '#a8e6f0';
+    ctx.fillRect(p.x + off[0] * 12 - 1, p.y + off[1] * 12 - 1, 2, 2);
+  }
+}
+
+function drawSlimes() {
+  if (!State.level) return;
+  const now = performance.now();
+  for (const ent of State.level.entities) {
+    if (ent.type !== 'slime' || ent.hp <= 0) continue;
+    // покачивание
+    const bob = Math.sin(now / 250 + ent.x) * 1;
+    const px = ent.px - TS/2;
+    const py = ent.py - TS/2 + bob;
+    if (ent.flashUntil > now) {
+      // белая вспышка
+      ctx.save();
+      ctx.filter = 'brightness(2.4) saturate(0.4)';
+      ctx.drawImage(SPRITES.slime, px, py);
+      ctx.restore();
+    } else {
+      ctx.drawImage(SPRITES.slime, px, py);
+    }
+    // полоска HP
+    if (ent.hp < 2) {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(px + 6, py - 3, 20, 4);
+      ctx.fillStyle = '#e94560';
+      ctx.fillRect(px + 7, py - 2, (ent.hp / 2) * 18, 2);
+    }
+  }
 }
 
 // Подсказка над интерактивным объектом, если оба рядом
@@ -606,8 +949,28 @@ function drawVineCutPrompt() {
   }
 }
 
-// Лёгкая виньетка по краям + дополнительное затемнение для тёмных тем
+// Лёгкая виньетка по краям + настоящая темнота для тёмных тем
+let darkMaskCanvas = null;
+function getDarkMask() {
+  if (!darkMaskCanvas) {
+    darkMaskCanvas = document.createElement('canvas');
+    darkMaskCanvas.width = CANVAS_W;
+    darkMaskCanvas.height = CANVAS_H;
+  }
+  return darkMaskCanvas;
+}
+
+function paintLightHole(c, x, y, r, alpha = 1) {
+  const grad = c.createRadialGradient(x, y, 0, x, y, r);
+  grad.addColorStop(0, `rgba(0,0,0,${alpha})`);
+  grad.addColorStop(0.55, `rgba(0,0,0,${alpha * 0.7})`);
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  c.fillStyle = grad;
+  c.fillRect(x - r, y - r, r * 2, r * 2);
+}
+
 function drawVignette() {
+  // Мягкая радиальная виньетка для всех уровней
   const grad = ctx.createRadialGradient(
     CANVAS_W/2, CANVAS_H/2, CANVAS_H * 0.25,
     CANVAS_W/2, CANVAS_H/2, CANVAS_H * 0.85
@@ -617,16 +980,35 @@ function drawVignette() {
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-  if (State.level && (State.level.theme === 'darkforest')) {
-    // дополнительный мрак, через который светят ауры игроков
+  // Настоящая темнота для тёмных уровней
+  if (State.level && State.level.theme === 'darkforest') {
+    const mask = getDarkMask();
+    const mctx = mask.getContext('2d');
+    // Перерисовываем маску каждый кадр
+    mctx.globalCompositeOperation = 'source-over';
+    mctx.fillStyle = 'rgba(4,2,12,0.92)';
+    mctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    // Вырезаем «дыры» света
+    mctx.globalCompositeOperation = 'destination-out';
+    paintLightHole(mctx, State.p1.x, State.p1.y, 78);    // мерцание Солиса
+    paintLightHole(mctx, State.p2.x, State.p2.y, 132);   // фонарь Луны (больше)
+    // Зажжённые руны тоже светят
+    if (State.level.entities) {
+      for (const ent of State.level.entities) {
+        if (ent.type === 'rune' && ent.lit) {
+          paintLightHole(mctx, ent.x * TS + TS/2, ent.y * TS + TS/2, 56, 0.8);
+        }
+      }
+    }
+    mctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(mask, 0, 0);
+
+    // тёплый свет от P1, холодный от P2 — лёгкое тонирование
     ctx.save();
-    ctx.fillStyle = 'rgba(8,4,20,0.5)';
-    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-    // ауры
     ctx.globalCompositeOperation = 'lighter';
-    const auraSize = SPRITES.auraP1.width;
-    ctx.drawImage(SPRITES.auraP1, State.p1.x - auraSize/2, State.p1.y - auraSize/2);
-    ctx.drawImage(SPRITES.auraP2, State.p2.x - auraSize/2, State.p2.y - auraSize/2);
+    const aSize = SPRITES.auraP1.width;
+    ctx.drawImage(SPRITES.auraP1, State.p1.x - aSize/2, State.p1.y - aSize/2);
+    ctx.drawImage(SPRITES.auraP2, State.p2.x - aSize/2, State.p2.y - aSize/2);
     ctx.restore();
   }
 }
@@ -634,6 +1016,7 @@ function drawVignette() {
 // HUD — обновляем DOM-сердечки и т.п. Сердечки оставляем символическими (3 неубиваемых).
 function updateHUD() {
   if (!DOM['p1-hearts']) return;
+  // Создаём по 3 сердца один раз
   if (DOM['p1-hearts'].children.length === 0) {
     for (let i = 0; i < 3; i++) {
       const el = document.createElement('span');
@@ -645,6 +1028,16 @@ function updateHUD() {
       el.className = 'heart';
       DOM['p2-hearts'].appendChild(el);
     }
+  }
+  // Обновляем «полные/пустые» по hp
+  if (State.p1 && State.p2) {
+    const update = (parent, hp) => {
+      Array.from(parent.children).forEach((el, i) => {
+        el.classList.toggle('empty', i >= hp);
+      });
+    };
+    update(DOM['p1-hearts'], State.p1.hp);
+    update(DOM['p2-hearts'], State.p2.hp);
   }
 }
 
@@ -797,10 +1190,15 @@ function frame() {
   // Обновление
   if (State.scene === 'game' && !State.dialog.active) {
     updatePlayers();
-    updatePlates();
+    updatePuzzles();
+    updateSlimes();
+    updateShardPickup();
 
     // Edge-actions
-    if (isEdge(KEY_P1_ACTION)) tryCutVine();
+    if (isEdge(KEY_P1_ACTION)) {
+      const cut = tryCutVine();
+      if (!cut) tryAttack();
+    }
     if (isEdge(KEY_P2_ACTION)) tryInteract();
 
     checkExit();
@@ -811,6 +1209,7 @@ function frame() {
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
     drawTilemap();
     drawEntities();
+    drawSlimes();
     drawPlayers();
     drawInteractPrompt();
     drawVineCutPrompt();
@@ -821,6 +1220,10 @@ function frame() {
   if (State.hintTimer > 0) {
     State.hintTimer -= 1/60;
     if (State.hintTimer <= 0) clearHint();
+  }
+  // обновление HUD сердец
+  if (State.scene === 'game' || State.scene === 'pause') {
+    updateHUD();
   }
 
   // Анимация на титульном экране
@@ -838,6 +1241,7 @@ function attachButtons() {
     e.target.blur();
     State.scene = 'game';
     State.visitedAltars = new Set();
+    State.collectedShards = 0;
     loadLevel(0);
     showScreen('game');
     if (DOM['game-canvas']) DOM['game-canvas'].focus();
