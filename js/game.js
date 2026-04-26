@@ -42,7 +42,8 @@ const State = {
   // прочее
   totemPath: { p1: false, p2: false }, // оба алтаря посещены на 5 уровне
   endTriggered: false,
-  collectedShards: 0   // прогресс сбора осколков сквозь все уровни
+  collectedShards: 0,  // прогресс сбора осколков сквозь все уровни
+  particles: []        // живые частицы — спавнятся событиями
 };
 
 // ===== DOM-ссылки =====
@@ -308,7 +309,11 @@ function getActorTile(actor) {
 }
 
 function updatePlayers() {
-  if (State.dialog.active) return; // не двигаемся в диалоге
+  if (State.dialog.active) {
+    State.p1.movingT = 0;
+    State.p2.movingT = 0;
+    return;
+  }
 
   // Игрок 1
   let dx = 0, dy = 0;
@@ -317,6 +322,8 @@ function updatePlayers() {
   if (isKey(KEY_P1_UP))    dy -= 1;
   if (isKey(KEY_P1_DOWN))  dy += 1;
   updateActorDir(State.p1, dx, dy);
+  State.p1.moving = (dx !== 0 || dy !== 0);
+  State.p1.movingT = State.p1.moving ? (State.p1.movingT || 0) + 1 : 0;
   if (dx && dy) { dx *= 0.707; dy *= 0.707; }
   moveActor(State.p1, dx * PLAYER_SPEED, dy * PLAYER_SPEED, true);
 
@@ -327,6 +334,8 @@ function updatePlayers() {
   if (isKey(KEY_P2_UP))    dy -= 1;
   if (isKey(KEY_P2_DOWN))  dy += 1;
   updateActorDir(State.p2, dx, dy);
+  State.p2.moving = (dx !== 0 || dy !== 0);
+  State.p2.movingT = State.p2.moving ? (State.p2.movingT || 0) + 1 : 0;
   if (dx && dy) { dx *= 0.707; dy *= 0.707; }
   moveActor(State.p2, dx * PLAYER_SPEED, dy * PLAYER_SPEED, false);
 }
@@ -416,6 +425,11 @@ function tryCutVine() {
   if (closest) {
     closest.cut = true;
     setHint('Лоза перерублена.');
+    // Зелёные частицы — листья и сок
+    const cx = closest.x * TS + TS/2;
+    const cy = closest.y * TS + TS/2;
+    spawnBurst(cx, cy, 10, { color: '#7bc043', life: 0.7 });
+    spawnBurst(cx, cy, 4, { color: '#4a7c1a', life: 0.9 });
     return true;
   }
   return false;
@@ -500,8 +514,20 @@ function updateSlimes() {
         const len = Math.sqrt(ddx*ddx + ddy*ddy) || 1;
         p.x -= (ddx / len) * 8;
         p.y -= (ddy / len) * 8;
+        // частицы боли — красные капли
+        spawnBurst(p.x, p.y, 6, { color: '#e94560', life: 0.5, gravity: 0.12 });
         if (p.hp === 0) onPlayerFell(p);
       }
+    }
+  }
+  // Уничтоженные слизни — взрыв капель + удалить из массива
+  for (let i = State.level.entities.length - 1; i >= 0; i--) {
+    const ent = State.level.entities[i];
+    if (ent.type === 'slime' && ent.hp <= 0 && !ent._gone) {
+      ent._gone = true;
+      spawnBurst(ent.px, ent.py, 12, { color: '#7bc043', life: 0.7, gravity: 0.1 });
+      spawnBurst(ent.px, ent.py, 6, { color: '#2d5016', life: 0.9, gravity: 0.1 });
+      // оставляем в массиве, но _gone не рисуется
     }
   }
 }
@@ -510,6 +536,123 @@ function nearestPlayer(px, py) {
   const d1 = Math.hypot(State.p1.x - px, State.p1.y - py);
   const d2 = Math.hypot(State.p2.x - px, State.p2.y - py);
   return d1 < d2 ? State.p1 : State.p2;
+}
+
+// ===== Система частиц =====
+function spawnParticle(x, y, opts = {}) {
+  State.particles.push({
+    x, y,
+    vx: opts.vx !== undefined ? opts.vx : (Math.random() - 0.5) * 2.5,
+    vy: opts.vy !== undefined ? opts.vy : (Math.random() - 0.5) * 2.5 - 1,
+    life: opts.life || 0.9,
+    maxLife: opts.life || 0.9,
+    color: opts.color || '#fff3b0',
+    size: opts.size || 2,
+    gravity: opts.gravity !== undefined ? opts.gravity : 0.06,
+    fade: opts.fade !== false  // alpha shrinks with life by default
+  });
+}
+
+function spawnBurst(x, y, count, opts) {
+  for (let i = 0; i < count; i++) {
+    const ang = (Math.PI * 2 * i) / count + Math.random() * 0.4;
+    const speed = 1 + Math.random() * 1.5;
+    spawnParticle(x, y, Object.assign({
+      vx: Math.cos(ang) * speed,
+      vy: Math.sin(ang) * speed - 0.5
+    }, opts || {}));
+  }
+}
+
+function spawnSparkles(x, y, count, color) {
+  for (let i = 0; i < count; i++) {
+    spawnParticle(x + (Math.random() - 0.5) * 16, y + (Math.random() - 0.5) * 16, {
+      vx: (Math.random() - 0.5) * 0.6,
+      vy: -0.4 - Math.random() * 0.8,
+      life: 1.2,
+      color: color || '#fff3b0',
+      gravity: -0.02,  // floats up
+      size: 1 + Math.floor(Math.random() * 2)
+    });
+  }
+}
+
+function updateParticles() {
+  const dt = 1 / 60;
+  for (let i = State.particles.length - 1; i >= 0; i--) {
+    const p = State.particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += p.gravity;
+    p.vx *= 0.97;
+    p.life -= dt;
+    if (p.life <= 0) State.particles.splice(i, 1);
+  }
+}
+
+function drawParticles() {
+  for (const p of State.particles) {
+    const a = p.fade ? Math.max(0, p.life / p.maxLife) : 1;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = p.color;
+    const s = p.size;
+    ctx.fillRect(Math.round(p.x - s/2), Math.round(p.y - s/2), s, s);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Светлячки и амбиентные искры — фоновая жизнь мира
+function updateAmbient() {
+  if (!State.level) return;
+  // светлячки: ~1 искра в 0.4 сек на тёмных уровнях, реже на светлых
+  const dark = State.level.theme === 'darkforest';
+  const chance = dark ? 0.06 : 0.012;
+  if (Math.random() < chance) {
+    const x = Math.random() * CANVAS_W;
+    const y = Math.random() * CANVAS_H;
+    spawnParticle(x, y, {
+      vx: (Math.random() - 0.5) * 0.4,
+      vy: -0.2 - Math.random() * 0.3,
+      life: 2.0 + Math.random() * 1.5,
+      color: dark ? '#fff3b0' : '#cdb4db',
+      gravity: -0.005,
+      size: 1
+    });
+  }
+  // у активных алтарей мерцают вверх искры
+  for (const ent of State.level.entities) {
+    if (ent.type !== 'altar' && ent.type !== 'totem' && ent.type !== 'wanderer') continue;
+    if (ent.done) continue;
+    if (Math.random() < 0.04) {
+      const ax = ent.x * TS + TS/2 + (Math.random() - 0.5) * 18;
+      const ay = ent.y * TS + 22 + (Math.random() - 0.5) * 4;
+      spawnParticle(ax, ay, {
+        vx: (Math.random() - 0.5) * 0.2,
+        vy: -0.5 - Math.random() * 0.3,
+        life: 1.4,
+        color: ent.type === 'totem' ? '#fff3b0' :
+               ent.type === 'wanderer' ? '#ffafcc' : '#cdb4db',
+        gravity: -0.01,
+        size: 1
+      });
+    }
+  }
+  // у горящих рун — голубые искры
+  for (const ent of State.level.entities) {
+    if (ent.type !== 'rune' || !ent.lit) continue;
+    if (Math.random() < 0.03) {
+      const ax = ent.x * TS + TS/2 + (Math.random() - 0.5) * 14;
+      const ay = ent.y * TS + TS/2 + (Math.random() - 0.5) * 14;
+      spawnParticle(ax, ay, {
+        vx: (Math.random() - 0.5) * 0.2,
+        vy: -0.3 - Math.random() * 0.3,
+        life: 1.2,
+        color: '#a8e6f0',
+        gravity: -0.01,
+        size: 1
+      });
+    }
+  }
 }
 
 // ===== Сбор осколков Тотема =====
@@ -524,6 +667,9 @@ function updateShardPickup() {
         ent.collected = true;
         State.collectedShards++;
         setHint(`Осколок собран! (${State.collectedShards}/4)`, 2000);
+        // искрящаяся вспышка
+        spawnBurst(ex, ey, 14, { color: '#fff3b0', life: 1.0, gravity: -0.04 });
+        spawnBurst(ex, ey, 8, { color: '#cdb4db', life: 1.2, gravity: -0.02 });
         return;
       }
     }
@@ -623,6 +769,11 @@ function openAltarDialog(altar) {
     // Алтарь восстанавливает силы — оба полностью лечатся.
     if (State.p1) State.p1.hp = 3;
     if (State.p2) State.p2.hp = 3;
+    // Лёгкая магическая вспышка у алтаря — закрытие диалога
+    const ax = altar.x * TS + TS/2;
+    const ay = altar.y * TS + TS/2;
+    spawnSparkles(ax, ay, 18, '#cdb4db');
+    spawnSparkles(ax, ay, 8, '#fff3b0');
     saveProgress();
   };
 
@@ -699,7 +850,9 @@ function getTileSprite(ch, tx, ty) {
     case 's': return SPRITES.tileStone;
     case 'k': return SPRITES.tileDark;
     case 'w': case '~': {
-      const idx = ((tx + ty) % 2 === 0) ? 0 : 1;
+      // анимированная вода — двух-кадровая анимация на ~600мс
+      const phase = Math.floor(Date.now() / 320) + tx + ty;
+      const idx = phase % 2;
       return SPRITES.tileWater[idx];
     }
     case '#': case 'W': return SPRITES.tileWall;
@@ -832,10 +985,21 @@ function drawEntities() {
   }
 }
 
+function pickPlayerSprite(p, prefix) {
+  // prefix: 'p1' | 'p2'. Возвращает один из 4 направленных спрайтов.
+  switch (p.dir) {
+    case 'up':    return SPRITES[prefix + 'Up'];
+    case 'left':  return SPRITES[prefix + 'Left'];
+    case 'right': return SPRITES[prefix + 'Right'];
+    case 'down':
+    default:      return SPRITES[prefix];
+  }
+}
+
 function drawPlayers() {
   const s = TS;
-  drawOnePlayer(State.p1, SPRITES.p1);
-  drawOnePlayer(State.p2, SPRITES.p2);
+  drawOnePlayer(State.p1, pickPlayerSprite(State.p1, 'p1'));
+  drawOnePlayer(State.p2, pickPlayerSprite(State.p2, 'p2'));
 
   // Свинг меча Солиса
   if (State.swing && State.swing.until > performance.now()) {
@@ -858,15 +1022,27 @@ function drawOnePlayer(p, sprite) {
   const inv = p.invulnUntil > performance.now();
   if (inv) {
     const blink = Math.floor(performance.now() / 80) % 2 === 0;
-    if (blink) return; // пропускаем кадр
+    if (blink) return;
   }
-  ctx.drawImage(sprite, p.x - s/2, p.y - s/2);
-  // Маленькая «искра» в направлении взгляда — показывает, куда атакует/смотрит
+  // Шаговый «боббинг»: при движении — синусоида, в покое — лёгкое дыхание
+  let bob = 0;
+  if (p.moving) {
+    bob = Math.round(Math.sin(p.movingT * 0.32) * 1.2);
+  } else {
+    bob = Math.round(Math.sin(performance.now() / 700 + (p === State.p1 ? 0 : 1.7)) * 0.5);
+  }
+  // Тень
+  ctx.fillStyle = 'rgba(0,0,0,0.32)';
+  ctx.beginPath();
+  ctx.ellipse(p.x, p.y + 11, 9, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.drawImage(sprite, p.x - s/2, p.y - s/2 + bob);
+  // Искра-указатель направления
   if (p.dir) {
     const off = { up: [0,-1], down: [0,1], left: [-1,0], right: [1,0] }[p.dir];
     const isP1 = (p === State.p1);
     ctx.fillStyle = isP1 ? '#ffe066' : '#a8e6f0';
-    ctx.fillRect(p.x + off[0] * 12 - 1, p.y + off[1] * 12 - 1, 2, 2);
+    ctx.fillRect(p.x + off[0] * 12 - 1, p.y + off[1] * 12 - 1 + bob, 2, 2);
   }
 }
 
@@ -875,25 +1051,36 @@ function drawSlimes() {
   const now = performance.now();
   for (const ent of State.level.entities) {
     if (ent.type !== 'slime' || ent.hp <= 0) continue;
-    // покачивание
-    const bob = Math.sin(now / 250 + ent.x) * 1;
-    const px = ent.px - TS/2;
-    const py = ent.py - TS/2 + bob;
+    if (ent._gone) continue;
+    // squash & stretch + лёгкое покачивание
+    const t = now / 220 + ent.x * 0.7;
+    const sq = Math.sin(t);  // -1..1
+    const sx = 1 + sq * 0.14;
+    const sy = 1 - sq * 0.14;
+    const w = TS * sx;
+    const h = TS * sy;
+    const px = ent.px - w/2;
+    // когда сжат — ниже к земле
+    const py = ent.py - h/2 + (1 - sy) * 4 + Math.sin(now/700 + ent.x) * 0.8;
+    // тень под слизнем
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(ent.px, ent.py + 6, 8 * sx, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+
     if (ent.flashUntil > now) {
-      // белая вспышка
       ctx.save();
       ctx.filter = 'brightness(2.4) saturate(0.4)';
-      ctx.drawImage(SPRITES.slime, px, py);
+      ctx.drawImage(SPRITES.slime, px, py, w, h);
       ctx.restore();
     } else {
-      ctx.drawImage(SPRITES.slime, px, py);
+      ctx.drawImage(SPRITES.slime, px, py, w, h);
     }
-    // полоска HP
     if (ent.hp < 2) {
       ctx.fillStyle = '#000';
-      ctx.fillRect(px + 6, py - 3, 20, 4);
+      ctx.fillRect(ent.px - 10, ent.py - TS/2 - 2, 20, 4);
       ctx.fillStyle = '#e94560';
-      ctx.fillRect(px + 7, py - 2, (ent.hp / 2) * 18, 2);
+      ctx.fillRect(ent.px - 9, ent.py - TS/2 - 1, (ent.hp / 2) * 18, 2);
     }
   }
 }
@@ -1193,6 +1380,8 @@ function frame() {
     updatePuzzles();
     updateSlimes();
     updateShardPickup();
+    updateParticles();
+    updateAmbient();
 
     // Edge-actions
     if (isEdge(KEY_P1_ACTION)) {
@@ -1211,6 +1400,7 @@ function frame() {
     drawEntities();
     drawSlimes();
     drawPlayers();
+    drawParticles();
     drawInteractPrompt();
     drawVineCutPrompt();
     drawVignette();

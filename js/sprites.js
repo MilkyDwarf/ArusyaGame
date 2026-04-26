@@ -141,6 +141,85 @@ SPRITES.p2 = makeSprite([
   "....XX....XX...."
 ]);
 
+// Дополнительные направления (up = со спины, left = в профиль; right = flipH(left))
+SPRITES.p1Up = makeSprite([
+  "................",
+  "................",
+  ".....XXXXXX.....",
+  "....XOoooooX....",
+  "....XOoooooX....",
+  "....XOoooooX....",
+  "....XOoooooX....",
+  "....XDDDDDDX....",
+  "...XXOoooooXX...",
+  "...XoOOOOOOoX...",
+  "...XoOOOOOOoX...",
+  "...XobbbbbboX...",
+  "...XoDDDDDDoX...",
+  "....XX0..0XX....",
+  "....XX0..0XX....",
+  "....XX....XX...."
+]);
+
+SPRITES.p1Left = makeSprite([
+  "................",
+  "................",
+  ".....XXXXXX.....",
+  "....XOOoooOX....",
+  "...XoOFFFFoX....",
+  "...XoFF0FFoX....",
+  "...XoOFFFFoX....",
+  "....XDDDDDXX....",
+  "....XOOooooX....",
+  "...XOoOOOOoX....",
+  "...XOoOOOOoX....",
+  "...XobbbbboX....",
+  "...XoOOOOoX.....",
+  "....XX..XX......",
+  "....XX..XX......",
+  "................"
+]);
+SPRITES.p1Right = flipH(SPRITES.p1Left);
+
+SPRITES.p2Up = makeSprite([
+  "................",
+  "................",
+  ".....XXXXXX.....",
+  "....XCccccCX....",
+  "....XCccccCX....",
+  "....XCccccCX....",
+  "....XCccccCX....",
+  "....XiiiiiiX....",
+  "...XXCccccCXX...",
+  "...XcCCCCCCcX...",
+  "...XcCCCCCCcX...",
+  "...XciiiiiicX...",
+  "...XcCCCCCCcX...",
+  "....XX0..0XX....",
+  "....XX0..0XX....",
+  "....XX....XX...."
+]);
+
+SPRITES.p2Left = makeSprite([
+  "................",
+  "................",
+  ".....XXXXXX.....",
+  "....XCCccccX....",
+  "...XcCFFFFcX....",
+  "...XcFF0FFcX....",
+  "...XcCFFFFcX....",
+  "....XiiiiiXX....",
+  "....XCCccccX....",
+  "...XCcCCCCcX....",
+  "...XCcCCCCcX....",
+  "...XciiiiicX....",
+  "...XcCCCCcX.....",
+  "....XX..XX......",
+  "....XX..XX......",
+  "................"
+]);
+SPRITES.p2Right = flipH(SPRITES.p2Left);
+
 // "тусклый" вариант — игрок без сознания / получил урон. Тёмная палитра поверх.
 SPRITES.p1_down = makeSprite([
   "................",
