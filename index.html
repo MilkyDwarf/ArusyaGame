@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Сердце Леса — игра для двоих</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app">
+
+    <!-- TITLE SCREEN -->
+    <section id="title-screen" class="screen active">
+      <div class="title-art">
+        <canvas id="title-canvas" width="320" height="180"></canvas>
+      </div>
+      <h1 class="game-title">Сердце Леса</h1>
+      <p class="subtitle">Кооперативная история для двоих</p>
+
+      <div class="title-buttons">
+        <button id="btn-start-new" class="big-btn">Начать новую историю</button>
+        <button id="btn-continue" class="big-btn" disabled>Продолжить</button>
+        <button id="btn-how-to" class="big-btn">Управление</button>
+      </div>
+
+      <p class="footnote">
+        Игра для пары. Время прохождения — 1–2 часа.<br>
+        Не торопитесь. Главное здесь не движение, а разговор.
+      </p>
+    </section>
+
+    <!-- HOW TO PLAY -->
+    <section id="howto-screen" class="screen">
+      <div class="howto-card">
+        <h2>Как играть вместе</h2>
+
+        <div class="player-row p1">
+          <div class="player-icon" id="p1-icon-howto"></div>
+          <div>
+            <h3>Игрок 1 — Солис, дух тепла</h3>
+            <p><b>WASD</b> — движение</p>
+            <p><b>Пробел</b> — действие: рубить лозы, толкать камни, бить слизней</p>
+          </div>
+        </div>
+
+        <div class="player-row p2">
+          <div class="player-icon" id="p2-icon-howto"></div>
+          <div>
+            <h3>Игрок 2 — Луна, дух света</h3>
+            <p><b>Стрелки</b> — движение</p>
+            <p><b>Enter</b> — действие: фонарь, активация рун, разговор у алтаря</p>
+          </div>
+        </div>
+
+        <div class="rules">
+          <p>В игре нет проигрыша. Получив урон, дух становится тусклым и приходит в себя через несколько секунд.</p>
+          <p>В мире разбросаны <b>Алтари Беседы</b> — подойдите к ним вдвоём и нажмите <b>Enter</b>. Игра задаст вопрос — отвечайте друг другу вслух, не торопитесь.</p>
+          <p>Цель: пройти пять локаций леса и собрать осколки <b>Тотема Связи</b>.</p>
+        </div>
+
+        <button id="btn-howto-back" class="big-btn">Назад</button>
+      </div>
+    </section>
+
+    <!-- GAME SCREEN -->
+    <section id="game-screen" class="screen">
+      <div class="hud">
+        <div class="hud-side">
+          <div class="hud-name p1-color">Солис</div>
+          <div class="hearts" id="p1-hearts"></div>
+        </div>
+        <div class="hud-center">
+          <div class="level-name" id="level-name">Опушка пробуждения</div>
+          <div class="level-hint" id="level-hint"></div>
+        </div>
+        <div class="hud-side hud-right">
+          <div class="hud-name p2-color">Луна</div>
+          <div class="hearts" id="p2-hearts"></div>
+        </div>
+      </div>
+
+      <div class="canvas-wrap">
+        <canvas id="game-canvas" width="640" height="480" tabindex="0"></canvas>
+        <div id="hint-toast" class="hint-toast"></div>
+      </div>
+
+      <div class="game-footer">
+        <button id="btn-pause" class="small-btn">Пауза</button>
+        <span class="progress-text" id="progress-text"></span>
+        <button id="btn-skip-talk" class="small-btn ghost" style="display:none">Готовы продолжить →</button>
+      </div>
+    </section>
+
+    <!-- PAUSE OVERLAY -->
+    <section id="pause-screen" class="screen overlay">
+      <div class="pause-card">
+        <h2>Пауза</h2>
+        <button id="btn-resume" class="big-btn">Вернуться в игру</button>
+        <button id="btn-restart-level" class="big-btn">Перезапустить локацию</button>
+        <button id="btn-to-title" class="big-btn ghost">Выйти в меню</button>
+      </div>
+    </section>
+
+    <!-- DIALOG (QUESTION) -->
+    <section id="dialog-screen" class="screen overlay">
+      <div class="dialog-card">
+        <div class="dialog-altar"></div>
+        <div class="dialog-tag" id="dialog-tag">Вопрос</div>
+        <h2 class="dialog-question" id="dialog-question"></h2>
+        <p class="dialog-hint" id="dialog-hint"></p>
+        <div class="dialog-prompts">
+          <div class="prompt-card p1-card">
+            <div class="prompt-label p1-color">Отвечает Солис</div>
+            <button class="prompt-done" data-player="1">Я ответил(а)</button>
+          </div>
+          <div class="prompt-card p2-card">
+            <div class="prompt-label p2-color">Отвечает Луна</div>
+            <button class="prompt-done" data-player="2">Я ответил(а)</button>
+          </div>
+        </div>
+        <p class="dialog-source" id="dialog-source"></p>
+        <button id="btn-dialog-continue" class="big-btn" disabled>Продолжить путь</button>
+      </div>
+    </section>
+
+    <!-- ENDING -->
+    <section id="end-screen" class="screen">
+      <div class="end-card">
+        <canvas id="end-canvas" width="320" height="180"></canvas>
+        <h1>Тотем Связи восстановлен</h1>
+        <p class="end-text">
+          Вы прошли путь. Лес снова дышит — потому что вы прошли его вместе.
+        </p>
+        <p class="end-text">
+          Игра — лишь повод. Настоящее произошло между вами в эти часы.
+          Возьмите три обещания, которые вы дали у последнего алтаря, и запишите их.
+          Завтра — снова вместе.
+        </p>
+        <button id="btn-restart" class="big-btn">Начать заново</button>
+      </div>
+    </section>
+
+  </div>
+
+  <script src="js/sprites.js"></script>
+  <script src="js/questions.js"></script>
+  <script src="js/levels.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>
